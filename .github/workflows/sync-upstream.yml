@@ -1,0 +1,75 @@
+# Sync from the upstream template (ArnasDon/wacrm).
+#
+# GitHub-only — this file is not imported by the Next.js app. It never
+# edits src/, env, or translations. Production (main / Vercel) is
+# unchanged until you merge the pull request it opens.
+#
+# Forks: GitHub disables scheduled workflows on forks until you open
+# the Actions tab and enable them. Use "Run workflow" anytime.
+
+name: Sync upstream
+
+on:
+  schedule:
+    # Hourly. GitHub may delay cron jobs by several minutes.
+    - cron: "0 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Open PR from ArnasDon/wacrm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream/main onto a bot branch
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/ArnasDon/wacrm.git
+          git fetch --no-tags upstream main
+          git checkout -B sync/upstream origin/main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "up_to_date=true" >> "$GITHUB_OUTPUT"
+            echo "Already up to date with ArnasDon/wacrm."
+            exit 0
+          fi
+          echo "up_to_date=false" >> "$GITHUB_OUTPUT"
+          if ! git merge --no-edit upstream/main; then
+            echo "::error::Conflict merging ArnasDon/wacrm into this repo. Resolve locally: git fetch https://github.com/ArnasDon/wacrm.git main && git merge FETCH_HEAD"
+            exit 1
+          fi
+
+      - name: Push branch and open pull request
+        if: steps.merge.outputs.up_to_date != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git push --force-with-lease origin sync/upstream
+          if gh pr view sync/upstream --json url --jq .url; then
+            echo "Pull request already exists; branch updated."
+            exit 0
+          fi
+          gh pr create \
+            --base main \
+            --head sync/upstream \
+            --title "chore: sync from ArnasDon/wacrm" \
+            --body "$(cat <<'EOF'
+          Atualização automática a partir de https://github.com/ArnasDon/wacrm
+
+          Este PR **não entra em produção sozinho**. O app no `main` só muda quando você fizer merge.
+
+          Revise o [CHANGELOG](https://github.com/ArnasDon/wacrm/blob/main/CHANGELOG.md) do original antes de mesclar.
+          EOF
+          )"
